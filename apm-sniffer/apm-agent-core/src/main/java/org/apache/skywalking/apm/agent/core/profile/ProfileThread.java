@@ -77,6 +77,10 @@ public class ProfileThread implements Runnable {
             int profilerCount = profilers.length();
             for (int slot = 0; slot < profilerCount; slot++) {
                 ThreadProfiler currentProfiler = profilers.get(slot);
+                if (LOGGER.isDebugEnable()) {
+                    LOGGER.debug("Profiling operationName={} taskId={} slot={} currentProfiler={}",
+                            executionContext.getTask().getFirstSpanOPName(), executionContext.getTask().getTaskId(), slot, currentProfiler);
+                }
                 if (currentProfiler == null) {
                     continue;
                 }
@@ -86,19 +90,33 @@ public class ProfileThread implements Runnable {
                     case PENDING:
                         // check tracing context running time
                         currentProfiler.startProfilingIfNeed();
+                        if (LOGGER.isDebugEnable()) {
+                            LOGGER.debug("Profiling operationName={} taskId={} slot={} currentProfiler={} update status={} ",
+                                    executionContext.getTask().getFirstSpanOPName(), executionContext.getTask().getTaskId(), slot, currentProfiler, currentProfiler.profilingStatus());
+                        }
                         break;
 
                     case PROFILING:
                         // dump stack
                         TracingThreadSnapshot snapshot = currentProfiler.buildSnapshot();
+                        if (LOGGER.isDebugEnable()) {
+                            if (snapshot == null) {
+                                LOGGER.debug("Profiling operationName={} taskId={} slot={} currentProfiler={} buildSnapshot null",
+                                        executionContext.getTask().getFirstSpanOPName(), executionContext.getTask().getTaskId(), slot, currentProfiler);
+                            } else {
+                                LOGGER.debug("Profiling operationName={} taskId={} slot={} currentProfiler={} buildSnapshot traceSegmentId={}",
+                                        executionContext.getTask().getFirstSpanOPName(), executionContext.getTask().getTaskId(), slot, currentProfiler, snapshot.getTraceSegmentId());
+                            }
+                        }
                         if (snapshot != null) {
                             profileTaskChannelService.addProfilingSnapshot(snapshot);
+                            LOGGER.debug("Profiling operationName={} taskId={} slot={} currentProfiler={} Snapshot add to queue traceSegmentId={}",
+                                    executionContext.getTask().getFirstSpanOPName(), executionContext.getTask().getTaskId(), slot, currentProfiler, snapshot.getTraceSegmentId());
                         } else {
                             // tell execution context current tracing thread dump failed, stop it
                             executionContext.stopTracingProfile(currentProfiler.tracingContext());
                         }
                         break;
-
                 }
             }
 

@@ -25,31 +25,18 @@ import org.apache.skywalking.apm.agent.core.plugin.match.ClassMatch;
 
 import static net.bytebuddy.matcher.ElementMatchers.named;
 import static org.apache.skywalking.apm.agent.core.plugin.bytebuddy.ArgumentTypeNameMatch.takesArgumentWithType;
-import static org.apache.skywalking.apm.agent.core.plugin.match.NameMatch.byName;
+import static org.apache.skywalking.apm.agent.core.plugin.match.HierarchyMatch.byHierarchyMatch;
 
-public class HttpClientFinalizerInstrumentation extends AbstractGateway210EnhancePluginDefine {
+public class GlobalFilterInstrumentation extends AbstractGateway210EnhancePluginDefine {
 
     @Override
     protected ClassMatch enhanceClass() {
-        return byName(Constants.INTERCEPT_CLASS_HTTP_CLIENT_FINALIZER);
+        return byHierarchyMatch(Constants.INTERCEPT_CLASS_GLOBAL_FILTER);
     }
 
     @Override
     public ConstructorInterceptPoint[] getConstructorsInterceptPoints() {
-        return new ConstructorInterceptPoint[] {
-            new ConstructorInterceptPoint() {
-                @Override
-                public ElementMatcher<MethodDescription> getConstructorMatcher() {
-                    return takesArgumentWithType(0, "reactor.netty.tcp.TcpClient");
-                }
-
-                @Override
-                public String getConstructorInterceptor() {
-                    return Constants.CLIENT_FINALIZER_CONSTRUCTOR_INTERCEPTOR;
-                }
-            }
-
-        };
+        return new ConstructorInterceptPoint[0];
     }
 
     @Override
@@ -58,44 +45,13 @@ public class HttpClientFinalizerInstrumentation extends AbstractGateway210Enhanc
             new InstanceMethodsInterceptPoint() {
                 @Override
                 public ElementMatcher<MethodDescription> getMethodsMatcher() {
-                    return named("send");
+                    return named("filter").and(
+                        takesArgumentWithType(0, "org.springframework.web.server.ServerWebExchange"));
                 }
 
                 @Override
                 public String getMethodsInterceptor() {
-                    return Constants.HTTP_CLIENT_FINALIZER_SEND_INTERCEPTOR;
-                }
-
-                @Override
-                public boolean isOverrideArgs() {
-                    return true;
-                }
-            },
-            new InstanceMethodsInterceptPoint() {
-                @Override
-                public ElementMatcher<MethodDescription> getMethodsMatcher() {
-                    return named("uri");
-                }
-
-                @Override
-                public String getMethodsInterceptor() {
-                    return Constants.HTTP_CLIENT_FINALIZER_URI_INTERCEPTOR;
-                }
-
-                @Override
-                public boolean isOverrideArgs() {
-                    return false;
-                }
-            },
-            new InstanceMethodsInterceptPoint() {
-                @Override
-                public ElementMatcher<MethodDescription> getMethodsMatcher() {
-                    return named("responseConnection");
-                }
-
-                @Override
-                public String getMethodsInterceptor() {
-                    return Constants.HTTP_CLIENT_FINALIZER_RESPONSE_CONNECTION_INTERCEPTOR;
+                    return Constants.GLOBAL_FILTER_INTERCEPTOR;
                 }
 
                 @Override

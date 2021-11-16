@@ -31,6 +31,8 @@ public interface AbstractTracerContext {
      */
     void inject(ContextCarrier carrier);
 
+    void injectAsync(ContextCarrier carrier, String remoteAddr);
+
     /**
      * Build the reference between this segment and a cross-process segment. How to build, depends on the
      * implementation.

@@ -18,10 +18,11 @@
 
 package org.apache.skywalking.apm.agent.core.context;
 
-import java.util.LinkedList;
-import java.util.List;
 import org.apache.skywalking.apm.agent.core.context.trace.AbstractSpan;
 import org.apache.skywalking.apm.agent.core.context.trace.NoopSpan;
+
+import java.util.LinkedList;
+import java.util.List;
 
 /**
  * The <code>IgnoredTracerContext</code> represent a context should be ignored. So it just maintains the stack with an
@@ -46,6 +47,11 @@ public class IgnoredTracerContext implements AbstractTracerContext {
 
     @Override
     public void inject(ContextCarrier carrier) {
+        this.correlationContext.inject(carrier);
+    }
+
+    @Override
+    public void injectAsync(ContextCarrier carrier, String remoteAddr) {
         this.correlationContext.inject(carrier);
     }
 

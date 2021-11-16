@@ -18,7 +18,6 @@
 
 package org.apache.skywalking.apm.agent.core.context;
 
-import java.util.Arrays;
 import org.apache.skywalking.apm.agent.core.boot.BootService;
 import org.apache.skywalking.apm.agent.core.boot.DefaultImplementor;
 import org.apache.skywalking.apm.agent.core.boot.ServiceManager;
@@ -26,14 +25,19 @@ import org.apache.skywalking.apm.agent.core.conf.Config;
 import org.apache.skywalking.apm.agent.core.conf.dynamic.ConfigurationDiscoveryService;
 import org.apache.skywalking.apm.agent.core.conf.dynamic.watcher.IgnoreSuffixPatternsWatcher;
 import org.apache.skywalking.apm.agent.core.conf.dynamic.watcher.SpanLimitWatcher;
+import org.apache.skywalking.apm.agent.core.logging.api.ILog;
+import org.apache.skywalking.apm.agent.core.logging.api.LogManager;
 import org.apache.skywalking.apm.agent.core.remote.GRPCChannelListener;
 import org.apache.skywalking.apm.agent.core.remote.GRPCChannelManager;
 import org.apache.skywalking.apm.agent.core.remote.GRPCChannelStatus;
 import org.apache.skywalking.apm.agent.core.sampling.SamplingService;
 import org.apache.skywalking.apm.util.StringUtil;
 
+import java.util.Arrays;
+
 @DefaultImplementor
 public class ContextManagerExtendService implements BootService, GRPCChannelListener {
+    private static final ILog LOGGER = LogManager.getLogger(ContextManagerExtendService.class);
 
     private volatile String[] ignoreSuffixArray = new String[0];
 
@@ -53,9 +57,12 @@ public class ContextManagerExtendService implements BootService, GRPCChannelList
         ignoreSuffixArray = Config.Agent.IGNORE_SUFFIX.split(",");
         ignoreSuffixPatternsWatcher = new IgnoreSuffixPatternsWatcher("agent.ignore_suffix", this);
         spanLimitWatcher = new SpanLimitWatcher("agent.span_limit_per_segment");
+        if (LOGGER.isDebugEnable()) {
+            LOGGER.debug("boot createTraceContext ignoreSuffixArray={}", ignoreSuffixArray);
+        }
 
         ConfigurationDiscoveryService configurationDiscoveryService = ServiceManager.INSTANCE.findService(
-            ConfigurationDiscoveryService.class);
+                ConfigurationDiscoveryService.class);
         configurationDiscoveryService.registerAgentConfigChangeWatcher(spanLimitWatcher);
         configurationDiscoveryService.registerAgentConfigChangeWatcher(ignoreSuffixPatternsWatcher);
 
@@ -80,20 +87,37 @@ public class ContextManagerExtendService implements BootService, GRPCChannelList
         if (!Config.Agent.KEEP_TRACING && GRPCChannelStatus.DISCONNECT.equals(status)) {
             return new IgnoredTracerContext();
         }
+        if (LOGGER.isDebugEnable()) {
+            LOGGER.debug("createTraceContext status={} operationName={}", status, operationName);
+        }
 
         int suffixIdx = operationName.lastIndexOf(".");
         if (suffixIdx > -1 && Arrays.stream(ignoreSuffixArray)
-                                    .anyMatch(a -> a.equals(operationName.substring(suffixIdx)))) {
+                .anyMatch(a -> a.equals(operationName.substring(suffixIdx)))) {
             context = new IgnoredTracerContext();
+            if (LOGGER.isDebugEnable()) {
+                LOGGER.debug("createTraceContext match ignoreSuffixArray");
+            }
         } else {
             SamplingService samplingService = ServiceManager.INSTANCE.findService(SamplingService.class);
-            if (forceSampling || samplingService.trySampling(operationName)) {
+            boolean trySampling = samplingService.trySampling(operationName);
+            if (LOGGER.isDebugEnable()) {
+                LOGGER.debug("createTraceContext forceSampling={} trySampling={}", forceSampling, trySampling);
+            }
+            if (forceSampling || trySampling) {
                 context = new TracingContext(operationName, spanLimitWatcher);
             } else {
                 context = new IgnoredTracerContext();
             }
         }
+        if (LOGGER.isDebugEnable()) {
+            try {
+                LOGGER.debug("createTraceContext operationName={} segmentId={} traceId={}", operationName, context.getSegmentId(), context.getReadablePrimaryTraceId());
+            } catch (Exception e) {
+                LOGGER.error("createTraceContext error", e);
+            }
 
+        }
         return context;
     }
 

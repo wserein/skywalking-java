@@ -18,7 +18,6 @@
 
 package org.apache.skywalking.apm.agent.core.context;
 
-import java.util.Objects;
 import org.apache.skywalking.apm.agent.core.boot.BootService;
 import org.apache.skywalking.apm.agent.core.boot.ServiceManager;
 import org.apache.skywalking.apm.agent.core.context.trace.AbstractSpan;
@@ -27,6 +26,8 @@ import org.apache.skywalking.apm.agent.core.logging.api.ILog;
 import org.apache.skywalking.apm.agent.core.logging.api.LogManager;
 import org.apache.skywalking.apm.agent.core.sampling.SamplingService;
 import org.apache.skywalking.apm.util.StringUtil;
+
+import java.util.Objects;
 
 import static org.apache.skywalking.apm.agent.core.conf.Config.Agent.OPERATION_NAME_THRESHOLD;
 
@@ -103,9 +104,20 @@ public class ContextManager implements BootService {
             context = getOrCreate(operationName, true);
             span = context.createEntrySpan(operationName);
             context.extract(carrier);
+            if (LOGGER.isDebugEnable()) {
+                LOGGER.debug("createEntrySpan operationName={} traceId={} segmentId={} carrier.getTraceId={}",
+                        operationName, context.getReadablePrimaryTraceId(), context.getSegmentId(), carrier.getTraceId());
+
+            }
         } else {
             context = getOrCreate(operationName, false);
             span = context.createEntrySpan(operationName);
+        }
+        if (LOGGER.isDebugEnable()) {
+            LOGGER.debug("createEntrySpan operationName={} traceId={} segmentId={} isCarrier={} stack={} {}",
+                    operationName, context.getReadablePrimaryTraceId(), context.getSegmentId(), carrier != null && carrier.isValid(),
+                    Thread.currentThread().getStackTrace()[1],Thread.currentThread().getStackTrace()[2]);
+
         }
         return span;
     }
@@ -124,6 +136,11 @@ public class ContextManager implements BootService {
         AbstractTracerContext context = getOrCreate(operationName, false);
         AbstractSpan span = context.createExitSpan(operationName, remotePeer);
         context.inject(carrier);
+        if (LOGGER.isDebugEnable()) {
+            LOGGER.debug("createExitSpan operationName={} traceId={} segmentId={} isCarrier={} stack={} {}",
+                    operationName, context.getReadablePrimaryTraceId(), context.getSegmentId(), carrier != null && carrier.isValid(),
+                    Thread.currentThread().getStackTrace()[1],Thread.currentThread().getStackTrace()[2]);
+        }
         return span;
     }
 
@@ -135,6 +152,10 @@ public class ContextManager implements BootService {
 
     public static void inject(ContextCarrier carrier) {
         get().inject(carrier);
+    }
+
+    public static void injectAsync(ContextCarrier carrier,String remoteAddr){
+        get().injectAsync(carrier,remoteAddr);
     }
 
     public static void extract(ContextCarrier carrier) {
@@ -157,6 +178,13 @@ public class ContextManager implements BootService {
         if (!snapshot.isFromCurrent()) {
             get().continued(snapshot);
         }
+    }
+
+    public static void continuedAsync(ContextSnapshot snapshot) {
+        if (snapshot == null) {
+            throw new IllegalArgumentException("ContextSnapshot can't be null.");
+        }
+        get().continued(snapshot);
     }
 
     public static AbstractTracerContext awaitFinishAsync(AbstractSpan span) {
@@ -197,25 +225,6 @@ public class ContextManager implements BootService {
         }
     }
 
-    @Override
-    public void prepare() {
-
-    }
-
-    @Override
-    public void boot() {
-    }
-
-    @Override
-    public void onComplete() {
-
-    }
-
-    @Override
-    public void shutdown() {
-
-    }
-
     public static boolean isActive() {
         return get() != null;
     }
@@ -237,6 +246,25 @@ public class ContextManager implements BootService {
         }
 
         return tracerContext.getCorrelationContext();
+    }
+
+    @Override
+    public void prepare() {
+
+    }
+
+    @Override
+    public void boot() {
+    }
+
+    @Override
+    public void onComplete() {
+
+    }
+
+    @Override
+    public void shutdown() {
+
     }
 
 }

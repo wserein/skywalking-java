@@ -18,14 +18,6 @@
 
 package org.apache.skywalking.apm.agent.core.profile;
 
-import java.util.Collections;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import org.apache.skywalking.apm.agent.core.boot.BootService;
 import org.apache.skywalking.apm.agent.core.boot.DefaultImplementor;
 import org.apache.skywalking.apm.agent.core.boot.DefaultNamedThreadFactory;
@@ -37,6 +29,15 @@ import org.apache.skywalking.apm.agent.core.logging.api.LogManager;
 import org.apache.skywalking.apm.network.constants.ProfileConstants;
 import org.apache.skywalking.apm.util.StringUtil;
 
+import java.util.Collections;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
 /**
  * Profile task executor, use {@link #addProfileTask(ProfileTask)} to add a new profile task.
  */
@@ -47,20 +48,16 @@ public class ProfileTaskExecutionService implements BootService, TracingThreadLi
 
     // add a schedule while waiting for the task to start or finish
     private final static ScheduledExecutorService PROFILE_TASK_SCHEDULE = Executors.newSingleThreadScheduledExecutor(
-        new DefaultNamedThreadFactory("PROFILE-TASK-SCHEDULE"));
-
-    // last command create time, use to next query task list
-    private volatile long lastCommandCreateTime = -1;
-
-    // current processing profile task context
-    private final AtomicReference<ProfileTaskExecutionContext> taskExecutionContext = new AtomicReference<>();
-
+            new DefaultNamedThreadFactory("PROFILE-TASK-SCHEDULE"));
     // profile executor thread pool, only running one thread
     private final static ExecutorService PROFILE_EXECUTOR = Executors.newSingleThreadExecutor(
-        new DefaultNamedThreadFactory("PROFILING-TASK"));
-
+            new DefaultNamedThreadFactory("PROFILING-TASK"));
+    // current processing profile task context
+    private final AtomicReference<ProfileTaskExecutionContext> taskExecutionContext = new AtomicReference<>();
     // profile task list, include running and waiting running tasks
     private final List<ProfileTask> profileTaskList = Collections.synchronizedList(new LinkedList<>());
+    // last command create time, use to next query task list
+    private volatile long lastCommandCreateTime = -1;
 
     /**
      * add profile task from OAP
@@ -75,12 +72,15 @@ public class ProfileTaskExecutionService implements BootService, TracingThreadLi
         final CheckResult dataError = checkProfileTaskSuccess(task);
         if (!dataError.isSuccess()) {
             LOGGER.warn(
-                "check command error, cannot process this profile task. reason: {}", dataError.getErrorReason());
+                    "check command error, cannot process this profile task. reason: {}", dataError.getErrorReason());
             return;
         }
 
         // add task to list
         profileTaskList.add(task);
+        if (LOGGER.isDebugEnable()) {
+            LOGGER.debug("addProfileTask {} {}", task.getTaskId(), task.getFirstSpanOPName());
+        }
 
         // schedule to start task
         long timeToProcessMills = task.getStartTime() - System.currentTimeMillis();
@@ -128,9 +128,12 @@ public class ProfileTaskExecutionService implements BootService, TracingThreadLi
 
         // start profiling this task
         currentStartedTaskContext.startProfiling(PROFILE_EXECUTOR);
+        if (LOGGER.isDebugEnable()) {
+            LOGGER.debug("startProfiling operationName={} taskId={}", task.getFirstSpanOPName(), task.getTaskId());
+        }
 
         PROFILE_TASK_SCHEDULE.schedule(
-            () -> stopCurrentProfileTask(currentStartedTaskContext), task.getDuration(), TimeUnit.MINUTES);
+                () -> stopCurrentProfileTask(currentStartedTaskContext), task.getDuration(), TimeUnit.MINUTES);
     }
 
     /**
@@ -150,7 +153,7 @@ public class ProfileTaskExecutionService implements BootService, TracingThreadLi
 
         // notify profiling task has finished
         ServiceManager.INSTANCE.findService(ProfileTaskChannelService.class)
-                               .notifyProfileTaskFinish(needToStop.getTask());
+                .notifyProfileTaskFinish(needToStop.getTask());
     }
 
     @Override
@@ -193,12 +196,12 @@ public class ProfileTaskExecutionService implements BootService, TracingThreadLi
         // duration
         if (task.getDuration() < ProfileConstants.TASK_DURATION_MIN_MINUTE) {
             return new CheckResult(
-                false, "monitor duration must greater than " + ProfileConstants.TASK_DURATION_MIN_MINUTE + " minutes");
+                    false, "monitor duration must greater than " + ProfileConstants.TASK_DURATION_MIN_MINUTE + " minutes");
         }
         if (task.getDuration() > ProfileConstants.TASK_DURATION_MAX_MINUTE) {
             return new CheckResult(
-                false,
-                "The duration of the monitoring task cannot be greater than " + ProfileConstants.TASK_DURATION_MAX_MINUTE + " minutes"
+                    false,
+                    "The duration of the monitoring task cannot be greater than " + ProfileConstants.TASK_DURATION_MAX_MINUTE + " minutes"
             );
         }
 
@@ -210,8 +213,8 @@ public class ProfileTaskExecutionService implements BootService, TracingThreadLi
         // dump period
         if (task.getThreadDumpPeriod() < ProfileConstants.TASK_DUMP_PERIOD_MIN_MILLIS) {
             return new CheckResult(
-                false,
-                "dump period must be greater than or equals " + ProfileConstants.TASK_DUMP_PERIOD_MIN_MILLIS + " milliseconds"
+                    false,
+                    "dump period must be greater than or equals " + ProfileConstants.TASK_DUMP_PERIOD_MIN_MILLIS + " milliseconds"
             );
         }
 
@@ -221,7 +224,7 @@ public class ProfileTaskExecutionService implements BootService, TracingThreadLi
         }
         if (task.getMaxSamplingCount() >= ProfileConstants.TASK_MAX_SAMPLING_COUNT) {
             return new CheckResult(
-                false, "max sampling count must less than " + ProfileConstants.TASK_MAX_SAMPLING_COUNT);
+                    false, "max sampling count must less than " + ProfileConstants.TASK_MAX_SAMPLING_COUNT);
         }
 
         // check task queue, check only one task in a certain time
@@ -230,11 +233,11 @@ public class ProfileTaskExecutionService implements BootService, TracingThreadLi
 
             // if the end time of the task to be added is during the execution of any data, means is a error data
             if (taskProcessFinishTime >= profileTask.getStartTime() && taskProcessFinishTime <= calcProfileTaskFinishTime(
-                profileTask)) {
+                    profileTask)) {
                 return new CheckResult(
-                    false,
-                    "there already have processing task in time range, could not add a new task again. processing task monitor endpoint name: "
-                        + profileTask.getFirstSpanOPName()
+                        false,
+                        "there already have processing task in time range, could not add a new task again. processing task monitor endpoint name: "
+                                + profileTask.getFirstSpanOPName()
                 );
             }
         }
@@ -252,7 +255,15 @@ public class ProfileTaskExecutionService implements BootService, TracingThreadLi
             // stop profiling tracing context
             ProfileTaskExecutionContext currentExecutionContext = taskExecutionContext.get();
             if (currentExecutionContext != null) {
-                currentExecutionContext.stopTracingProfile(tracingContext);
+                ProfileTask task = currentExecutionContext.getTask();
+                if (task != null && System.currentTimeMillis() - tracingContext.createTime() > (long) task.getThreadDumpPeriod() * 1000 * 60) {
+                    if (LOGGER.isDebugEnable()) {
+                        LOGGER.debug("afterMainThreadFinish stopProfiling operationName={} taskId={} traceSegmentId={} status={}",
+                                task.getFirstSpanOPName(), task.getTaskId(), tracingContext.getSegmentId(), tracingContext.profileStatus());
+                    }
+                    currentExecutionContext.stopTracingProfile(tracingContext);
+                }
+
             }
         }
     }

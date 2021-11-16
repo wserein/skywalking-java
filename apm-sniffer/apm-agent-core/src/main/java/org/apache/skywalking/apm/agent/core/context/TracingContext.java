@@ -18,10 +18,6 @@
 
 package org.apache.skywalking.apm.agent.core.context;
 
-import java.util.LinkedList;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
-import java.util.concurrent.locks.ReentrantLock;
 import lombok.AccessLevel;
 import lombok.Getter;
 import org.apache.skywalking.apm.agent.core.boot.ServiceManager;
@@ -29,21 +25,17 @@ import org.apache.skywalking.apm.agent.core.conf.Config;
 import org.apache.skywalking.apm.agent.core.conf.dynamic.watcher.SpanLimitWatcher;
 import org.apache.skywalking.apm.agent.core.context.ids.DistributedTraceId;
 import org.apache.skywalking.apm.agent.core.context.ids.PropagatedTraceId;
-import org.apache.skywalking.apm.agent.core.context.trace.AbstractSpan;
-import org.apache.skywalking.apm.agent.core.context.trace.AbstractTracingSpan;
-import org.apache.skywalking.apm.agent.core.context.trace.EntrySpan;
-import org.apache.skywalking.apm.agent.core.context.trace.ExitSpan;
-import org.apache.skywalking.apm.agent.core.context.trace.ExitTypeSpan;
-import org.apache.skywalking.apm.agent.core.context.trace.LocalSpan;
-import org.apache.skywalking.apm.agent.core.context.trace.NoopExitSpan;
-import org.apache.skywalking.apm.agent.core.context.trace.NoopSpan;
-import org.apache.skywalking.apm.agent.core.context.trace.TraceSegment;
-import org.apache.skywalking.apm.agent.core.context.trace.TraceSegmentRef;
+import org.apache.skywalking.apm.agent.core.context.trace.*;
 import org.apache.skywalking.apm.agent.core.logging.api.ILog;
 import org.apache.skywalking.apm.agent.core.logging.api.LogManager;
 import org.apache.skywalking.apm.agent.core.profile.ProfileStatusReference;
 import org.apache.skywalking.apm.agent.core.profile.ProfileTaskExecutionService;
 import org.apache.skywalking.apm.util.StringUtil;
+
+import java.util.LinkedList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * The <code>TracingContext</code> represents a core tracing logic controller. It build the final {@link
@@ -58,18 +50,28 @@ import org.apache.skywalking.apm.util.StringUtil;
  */
 public class TracingContext implements AbstractTracerContext {
     private static final ILog LOGGER = LogManager.getLogger(TracingContext.class);
-    private long lastWarningTimestamp = 0;
-
+    private static final AtomicIntegerFieldUpdater<TracingContext> ASYNC_SPAN_COUNTER_UPDATER =
+            AtomicIntegerFieldUpdater.newUpdater(TracingContext.class, "asyncSpanCounter");
     /**
      * @see ProfileTaskExecutionService
      */
     private static ProfileTaskExecutionService PROFILE_TASK_EXECUTION_SERVICE;
-
+    private final long createTime;
+    /**
+     * profile status
+     */
+    private final ProfileStatusReference profileStatus;
+    @Getter(AccessLevel.PACKAGE)
+    private final CorrelationContext correlationContext;
+    @Getter(AccessLevel.PACKAGE)
+    private final ExtensionContext extensionContext;
+    //CDS watcher
+    private final SpanLimitWatcher spanLimitWatcher;
+    private long lastWarningTimestamp = 0;
     /**
      * The final {@link TraceSegment}, which includes all finished spans.
      */
     private TraceSegment segment;
-
     /**
      * Active spans stored in a Stack, usually called 'ActiveSpanStack'. This {@link LinkedList} is the in-memory
      * storage-structure. <p> I use {@link LinkedList#removeLast()}, {@link LinkedList#addLast(Object)} and {@link
@@ -82,37 +84,18 @@ public class TracingContext implements AbstractTracerContext {
      * thread tracing has been finished.
      */
     private AbstractSpan firstSpan = null;
-
     /**
      * A counter for the next span.
      */
     private int spanIdGenerator;
-
     /**
      * The counter indicates
      */
     @SuppressWarnings("unused") // updated by ASYNC_SPAN_COUNTER_UPDATER
     private volatile int asyncSpanCounter;
-    private static final AtomicIntegerFieldUpdater<TracingContext> ASYNC_SPAN_COUNTER_UPDATER =
-        AtomicIntegerFieldUpdater.newUpdater(TracingContext.class, "asyncSpanCounter");
     private volatile boolean isRunningInAsyncMode;
     private volatile ReentrantLock asyncFinishLock;
-
     private volatile boolean running;
-
-    private final long createTime;
-
-    /**
-     * profile status
-     */
-    private final ProfileStatusReference profileStatus;
-    @Getter(AccessLevel.PACKAGE)
-    private final CorrelationContext correlationContext;
-    @Getter(AccessLevel.PACKAGE)
-    private final ExtensionContext extensionContext;
-
-    //CDS watcher
-    private final SpanLimitWatcher spanLimitWatcher;
 
     /**
      * Initialize all fields with default value.
@@ -129,7 +112,7 @@ public class TracingContext implements AbstractTracerContext {
             PROFILE_TASK_EXECUTION_SERVICE = ServiceManager.INSTANCE.findService(ProfileTaskExecutionService.class);
         }
         this.profileStatus = PROFILE_TASK_EXECUTION_SERVICE.addProfiling(
-            this, segment.getTraceSegmentId(), firstOPName);
+                this, segment.getTraceSegmentId(), firstOPName);
 
         this.correlationContext = new CorrelationContext();
         this.extensionContext = new ExtensionContext();
@@ -180,6 +163,22 @@ public class TracingContext implements AbstractTracerContext {
         this.extensionContext.inject(carrier);
     }
 
+    public void injectAsync(ContextCarrier carrier, String remoteAddr) {
+        carrier.setTraceId(getReadablePrimaryTraceId());
+        carrier.setTraceSegmentId(this.segment.getTraceSegmentId());
+        carrier.setSpanId(this.activeSpan().getSpanId() == -1 ? 0 : this.activeSpan().getSpanId());
+        carrier.setParentService(Config.Agent.SERVICE_NAME);
+        carrier.setParentServiceInstance(Config.Agent.INSTANCE_NAME);
+        carrier.setParentEndpoint(first().getOperationName());
+        carrier.setAddressUsedAtClient(StringUtil.isBlank(remoteAddr) ? "127.0.0.1:8080" : remoteAddr);
+
+        this.correlationContext.inject(carrier);
+        this.extensionContext.inject(carrier);
+
+        LOGGER.debug("carrier injectAsync traceId={} segmentId={} spanId={} parentService={} parentServiceInstance={} endpoint={} addressUsedAtClient={}",
+                carrier.getTraceId(), carrier.getTraceSegmentId(), carrier.getSpanId(), carrier.getParentService(), carrier.getParentServiceInstance(), carrier.getParentEndpoint(), carrier.getAddressUsedAtClient());
+    }
+
     /**
      * Extract the carrier to build the reference for the pre segment.
      *
@@ -207,12 +206,12 @@ public class TracingContext implements AbstractTracerContext {
     @Override
     public ContextSnapshot capture() {
         ContextSnapshot snapshot = new ContextSnapshot(
-            segment.getTraceSegmentId(),
-            activeSpan().getSpanId(),
-            getPrimaryTraceId(),
-            first().getOperationName(),
-            this.correlationContext,
-            this.extensionContext
+                segment.getTraceSegmentId(),
+                activeSpan().getSpanId(),
+                getPrimaryTraceId(),
+                first().getOperationName(),
+                this.correlationContext,
+                this.extensionContext
         );
 
         return snapshot;
@@ -274,6 +273,13 @@ public class TracingContext implements AbstractTracerContext {
         TracingContext owner = this;
         final AbstractSpan parentSpan = peek();
         final int parentSpanId = parentSpan == null ? -1 : parentSpan.getSpanId();
+        if (LOGGER.isDebugEnable()) {
+            if (parentSpan == null) {
+                LOGGER.debug("createEntrySpan {} parentSpan is null");
+            } else {
+                LOGGER.debug("createEntrySpan {} parentSpanId={} isEntry={}", operationName, parentSpanId, parentSpan.isEntry());
+            }
+        }
         if (parentSpan != null && parentSpan.isEntry()) {
             /*
              * Only add the profiling recheck on creating entry span,
@@ -285,8 +291,8 @@ public class TracingContext implements AbstractTracerContext {
             return entrySpan.start();
         } else {
             entrySpan = new EntrySpan(
-                spanIdGenerator++, parentSpanId,
-                operationName, owner
+                    spanIdGenerator++, parentSpanId,
+                    operationName, owner
             );
             entrySpan.start();
             return push(entrySpan);
@@ -424,7 +430,7 @@ public class TracingContext implements AbstractTracerContext {
 
     /**
      * Finish this context, and notify all {@link TracingContextListener}s, managed by {@link
-     * TracingContext.ListenerManager} and {@link TracingContext.TracingThreadListenerManager}
+     * ListenerManager} and {@link TracingThreadListenerManager}
      */
     private void finish() {
         if (isRunningInAsyncMode) {
@@ -441,72 +447,13 @@ public class TracingContext implements AbstractTracerContext {
 
             if (isFinishedInMainThread && (!isRunningInAsyncMode || asyncSpanCounter == 0)) {
                 TraceSegment finishedSegment = segment.finish(isLimitMechanismWorking());
-                TracingContext.ListenerManager.notifyFinish(finishedSegment);
+                ListenerManager.notifyFinish(finishedSegment);
                 running = false;
             }
         } finally {
             if (isRunningInAsyncMode) {
                 asyncFinishLock.unlock();
             }
-        }
-    }
-
-    /**
-     * The <code>ListenerManager</code> represents an event notify for every registered listener, which are notified
-     * when the <code>TracingContext</code> finished, and {@link #segment} is ready for further process.
-     */
-    public static class ListenerManager {
-        private static List<TracingContextListener> LISTENERS = new LinkedList<>();
-
-        /**
-         * Add the given {@link TracingContextListener} to {@link #LISTENERS} list.
-         *
-         * @param listener the new listener.
-         */
-        public static synchronized void add(TracingContextListener listener) {
-            LISTENERS.add(listener);
-        }
-
-        /**
-         * Notify the {@link TracingContext.ListenerManager} about the given {@link TraceSegment} have finished. And
-         * trigger {@link TracingContext.ListenerManager} to notify all {@link #LISTENERS} 's {@link
-         * TracingContextListener#afterFinished(TraceSegment)}
-         *
-         * @param finishedSegment the segment that has finished
-         */
-        static void notifyFinish(TraceSegment finishedSegment) {
-            for (TracingContextListener listener : LISTENERS) {
-                listener.afterFinished(finishedSegment);
-            }
-        }
-
-        /**
-         * Clear the given {@link TracingContextListener}
-         */
-        public static synchronized void remove(TracingContextListener listener) {
-            LISTENERS.remove(listener);
-        }
-
-    }
-
-    /**
-     * The <code>ListenerManager</code> represents an event notify for every registered listener, which are notified
-     */
-    public static class TracingThreadListenerManager {
-        private static List<TracingThreadListener> LISTENERS = new LinkedList<>();
-
-        public static synchronized void add(TracingThreadListener listener) {
-            LISTENERS.add(listener);
-        }
-
-        static void notifyFinish(TracingContext finishedContext) {
-            for (TracingThreadListener listener : LISTENERS) {
-                listener.afterMainThreadFinish(finishedContext);
-            }
-        }
-
-        public static synchronized void remove(TracingThreadListener listener) {
-            LISTENERS.remove(listener);
         }
     }
 
@@ -550,8 +497,8 @@ public class TracingContext implements AbstractTracerContext {
             long currentTimeMillis = System.currentTimeMillis();
             if (currentTimeMillis - lastWarningTimestamp > 30 * 1000) {
                 LOGGER.warn(
-                    new RuntimeException("Shadow tracing context. Thread dump"),
-                    "More than {} spans required to create", spanLimitWatcher.getSpanLimit()
+                        new RuntimeException("Shadow tracing context. Thread dump"),
+                        "More than {} spans required to create", spanLimitWatcher.getSpanLimit()
                 );
                 lastWarningTimestamp = currentTimeMillis;
             }
@@ -567,5 +514,64 @@ public class TracingContext implements AbstractTracerContext {
 
     public ProfileStatusReference profileStatus() {
         return this.profileStatus;
+    }
+
+    /**
+     * The <code>ListenerManager</code> represents an event notify for every registered listener, which are notified
+     * when the <code>TracingContext</code> finished, and {@link #segment} is ready for further process.
+     */
+    public static class ListenerManager {
+        private static List<TracingContextListener> LISTENERS = new LinkedList<>();
+
+        /**
+         * Add the given {@link TracingContextListener} to {@link #LISTENERS} list.
+         *
+         * @param listener the new listener.
+         */
+        public static synchronized void add(TracingContextListener listener) {
+            LISTENERS.add(listener);
+        }
+
+        /**
+         * Notify the {@link ListenerManager} about the given {@link TraceSegment} have finished. And
+         * trigger {@link ListenerManager} to notify all {@link #LISTENERS} 's {@link
+         * TracingContextListener#afterFinished(TraceSegment)}
+         *
+         * @param finishedSegment the segment that has finished
+         */
+        static void notifyFinish(TraceSegment finishedSegment) {
+            for (TracingContextListener listener : LISTENERS) {
+                listener.afterFinished(finishedSegment);
+            }
+        }
+
+        /**
+         * Clear the given {@link TracingContextListener}
+         */
+        public static synchronized void remove(TracingContextListener listener) {
+            LISTENERS.remove(listener);
+        }
+
+    }
+
+    /**
+     * The <code>ListenerManager</code> represents an event notify for every registered listener, which are notified
+     */
+    public static class TracingThreadListenerManager {
+        private static List<TracingThreadListener> LISTENERS = new LinkedList<>();
+
+        public static synchronized void add(TracingThreadListener listener) {
+            LISTENERS.add(listener);
+        }
+
+        static void notifyFinish(TracingContext finishedContext) {
+            for (TracingThreadListener listener : LISTENERS) {
+                listener.afterMainThreadFinish(finishedContext);
+            }
+        }
+
+        public static synchronized void remove(TracingThreadListener listener) {
+            LISTENERS.remove(listener);
+        }
     }
 }

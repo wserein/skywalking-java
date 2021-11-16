@@ -17,15 +17,14 @@
 
 package org.apache.skywalking.apm.plugin.spring.cloud.gateway.v21x;
 
-import java.lang.reflect.Method;
-import java.net.URL;
-import java.util.function.BiFunction;
 import org.apache.skywalking.apm.agent.core.context.CarrierItem;
 import org.apache.skywalking.apm.agent.core.context.ContextCarrier;
 import org.apache.skywalking.apm.agent.core.context.ContextManager;
 import org.apache.skywalking.apm.agent.core.context.tag.Tags;
 import org.apache.skywalking.apm.agent.core.context.trace.AbstractSpan;
 import org.apache.skywalking.apm.agent.core.context.trace.SpanLayer;
+import org.apache.skywalking.apm.agent.core.logging.api.ILog;
+import org.apache.skywalking.apm.agent.core.logging.api.LogManager;
 import org.apache.skywalking.apm.agent.core.plugin.interceptor.enhance.EnhancedInstance;
 import org.apache.skywalking.apm.agent.core.plugin.interceptor.enhance.InstanceMethodsAroundInterceptor;
 import org.apache.skywalking.apm.agent.core.plugin.interceptor.enhance.MethodInterceptResult;
@@ -35,28 +34,40 @@ import org.reactivestreams.Publisher;
 import reactor.netty.NettyOutbound;
 import reactor.netty.http.client.HttpClientRequest;
 
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.util.function.BiFunction;
+
 import static org.apache.skywalking.apm.network.trace.component.ComponentsDefine.SPRING_CLOUD_GATEWAY;
 
 public class HttpClientFinalizerSendInterceptor implements InstanceMethodsAroundInterceptor {
+    private static final ILog LOGGER = LogManager.getLogger(HttpClientFinalizerSendInterceptor.class);
+
     @Override
     public void beforeMethod(EnhancedInstance objInst, Method method, Object[] allArguments, Class<?>[] argumentsTypes,
                              MethodInterceptResult result) throws Throwable {
         EnhanceObjectCache enhanceObjectCache = (EnhanceObjectCache) objInst.getSkyWalkingDynamicField();
-        AbstractSpan span = ContextManager.activeSpan();
-        span.prepareForAsync();
+        AbstractSpan span = null;
+        try {
+            span = ContextManager.activeSpan();
+            span.prepareForAsync();
+        } catch (Exception ignored) {
+        }
 
         if (!StringUtil.isEmpty(enhanceObjectCache.getUrl())) {
             URL url = new URL(enhanceObjectCache.getUrl());
 
             ContextCarrier contextCarrier = new ContextCarrier();
             AbstractSpan abstractSpan = ContextManager.createExitSpan(
-                "SpringCloudGateway/sendRequest", contextCarrier, getPeer(url));
+                    "SpringCloudGateway/sendRequest", contextCarrier, getPeer(url));
             Tags.URL.set(abstractSpan, enhanceObjectCache.getUrl());
             abstractSpan.prepareForAsync();
             abstractSpan.setComponent(SPRING_CLOUD_GATEWAY);
             abstractSpan.setLayer(SpanLayer.HTTP);
             ContextManager.stopSpan(abstractSpan);
-            ContextManager.stopSpan(span);
+            if (span != null) {
+                ContextManager.stopSpan(span);
+            }
 
             BiFunction<? super HttpClientRequest, ? super NettyOutbound, ? extends Publisher<Void>> finalSender = (BiFunction<? super HttpClientRequest, ? super NettyOutbound, ? extends Publisher<Void>>) allArguments[0];
             allArguments[0] = new BiFunction<HttpClientRequest, NettyOutbound, Publisher<Void>>() {
@@ -67,8 +78,11 @@ public class HttpClientFinalizerSendInterceptor implements InstanceMethodsAround
                     CarrierItem next = contextCarrier.items();
                     while (next.hasNext()) {
                         next = next.next();
-                        request.requestHeaders().remove(next.getHeadKey());
-                        request.requestHeaders().set(next.getHeadKey(), next.getHeadValue());
+                        if (!request.requestHeaders().contains(next.getHeadKey())) {
+//                            request.requestHeaders().remove(next.getHeadKey());
+                            request.requestHeaders().set(next.getHeadKey(), next.getHeadValue());
+                            LOGGER.debug("SpringCloudGateway/sendRequest carrier inject {} {}", next.getHeadKey(), next.getHeadValue());
+                        }
                     }
                     return publisher;
                 }
@@ -76,7 +90,9 @@ public class HttpClientFinalizerSendInterceptor implements InstanceMethodsAround
             enhanceObjectCache.setCacheSpan(abstractSpan);
         }
 
-        enhanceObjectCache.setSpan1(span);
+        if (span != null) {
+            enhanceObjectCache.setSpan1(span);
+        }
     }
 
     private String getPeer(URL url) {

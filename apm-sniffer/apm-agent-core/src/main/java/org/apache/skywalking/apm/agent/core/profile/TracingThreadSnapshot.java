@@ -18,10 +18,13 @@
 
 package org.apache.skywalking.apm.agent.core.profile;
 
-import java.util.List;
+import lombok.Data;
 import org.apache.skywalking.apm.network.language.profile.v3.ThreadSnapshot;
 import org.apache.skywalking.apm.network.language.profile.v3.ThreadStack;
 
+import java.util.List;
+
+@Data
 public class TracingThreadSnapshot {
 
     // thread profiler
