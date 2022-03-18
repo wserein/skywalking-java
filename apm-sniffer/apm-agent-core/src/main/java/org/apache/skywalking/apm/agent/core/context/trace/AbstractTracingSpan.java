@@ -33,6 +33,8 @@ import org.apache.skywalking.apm.agent.core.context.util.KeyValuePair;
 import org.apache.skywalking.apm.agent.core.context.util.TagValuePair;
 import org.apache.skywalking.apm.agent.core.context.util.ThrowableTransformer;
 import org.apache.skywalking.apm.agent.core.dictionary.DictionaryUtil;
+import org.apache.skywalking.apm.agent.core.logging.api.ILog;
+import org.apache.skywalking.apm.agent.core.logging.api.LogManager;
 import org.apache.skywalking.apm.network.language.agent.v3.SpanObject;
 import org.apache.skywalking.apm.network.language.agent.v3.SpanType;
 import org.apache.skywalking.apm.network.trace.component.Component;
@@ -42,6 +44,7 @@ import org.apache.skywalking.apm.network.trace.component.Component;
  * distributed trace.
  */
 public abstract class AbstractTracingSpan implements AbstractSpan {
+    private static final ILog LOGGER = LogManager.getLogger(AbstractTracingSpan.class);
     /**
      * Span id starts from 0.
      */
@@ -329,7 +332,8 @@ public abstract class AbstractTracingSpan implements AbstractSpan {
             throw new RuntimeException("Span is not in async mode, please use '#prepareForAsync' to active.");
         }
         if (isAsyncStopped) {
-            throw new RuntimeException("Can not do async finish for the span repeatedly.");
+            LOGGER.info("Can not do async finish for the span repeatedly.");
+            return this;
         }
         this.endTime = System.currentTimeMillis();
         owner.asyncStop(this);
